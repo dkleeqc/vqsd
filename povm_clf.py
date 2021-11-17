@@ -73,22 +73,8 @@ class SingleQubitPOVM():
         
         qnodes
 
-
+        https://pennylane.readthedocs.io/en/stable/code/api/pennylane.QNodeCollection.html
         return 
-
-
-
-
-https://pennylane.readthedocs.io/en/stable/code/api/pennylane.QNodeCollection.html
-
-
-
-
-
-
-
-
-        
 
 
     def unitaries_in_povm_mo(params):
@@ -124,8 +110,5 @@ class POVM_clf(SingleQubitPOVM):
         return (1/2) * (1 - (1/2)*K0psi0 + (1/2)*K1psi1)
 
 
-
-
-)
 
 
