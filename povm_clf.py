@@ -16,7 +16,7 @@ class SingleQubitPOVM():
         input: list of length 2
         i: the ith input state
         """
-        if types=='pure': 
+        if types == 'pure': 
             theta = 2 * np.arccos(state[0])
             phi = np.angle(state[1]/np.sin(theta/2)) if not np.isclose(np.sin(theta/2), 0) else 0
             #print(theta, phi)
@@ -78,9 +78,7 @@ class SingleQubitPOVM():
     """
 
 
-
-
-    def unitaries_in_povm_mo(self, params):
+    def unitaries(self, params):
         U = qml.Rot(params[0], params[1], params[2], wires=2).matrix
         Ry0 = qml.RY(params[3], wires=2).matrix
         Ry1 = qml.RY(params[4], wires=2).matrix
@@ -91,7 +89,7 @@ class SingleQubitPOVM():
 
 
     def kraus_op(self, params):
-        U, _, _, V0, V1 = unitaries_in_povm(params)
+        U, _, _, V0, V1 = self.unitaries_in_povm(params)
         D0 = np.diag([np.cos(params[3]/2), np.cos(params[4]/2)])
         D1 = np.diag([np.sin(params[3]/2), np.sin(params[4]/2)])
         K0 = np.dot(np.dot(V0, D0), U)
@@ -99,12 +97,20 @@ class SingleQubitPOVM():
 
         return K0, K1
 
+    
+    def povm(self, params):
+        K0, K1 = self.kraus_op(params)
+        E0 = np.dot(K0.conj().T, K0) 
+        E1 = np.dot(K1.conj().T, K1)
+        return E0, E1
+
 
 
 
 class POVM_clf(SingleQubitPOVM):
     def __init__(self, n, wires, init_states, dev):
-        
+        super().__init__(n=n)
+
         # initial random parameters
         self.params = 2 * np.pi * np.random.random([(3 + 8 * 2)])
         
@@ -143,4 +149,8 @@ class POVM_clf(SingleQubitPOVM):
 
         #print("Optimized rotation angles: {}".format(self.params))
         return cost_list
+
+
+    def Helstrom_bound(self):
+        return
 
