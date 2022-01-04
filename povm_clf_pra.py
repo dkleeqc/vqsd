@@ -136,32 +136,40 @@ class SingleQubitPOVM(State_Preparation):
             super().__init__(bloch_vec)
         self.n_outcome = n
 
+    def first_U(self, params, wire):
+        qml.Rot(params[0], params[1], params[2], wires=wire)
+
 
     def two_element_povm(self, params, wires):
-        # First arbitrary unitary gate
-        qml.Rot(params[0], params[1], params[2], wires=wires[0])
 
         # Controlled-RY gate controlled by first qubit in |0> state
         qml.PauliX(wires=wires[0])
-        qml.CRY(params[3], wires=[wires[0],wires[1]])
+        qml.CRY(params[0], wires=[wires[0],wires[1]])
         qml.PauliX(wires=wires[0])
         
         # Controlled-RY gate controlled by first qubit in |1> state
-        qml.CRY(params[4], wires=[wires[0],wires[1]])
+        qml.CRY(params[1], wires=[wires[0],wires[1]])
+        
+        # Controlled-Rotation gate (arbitrary single-qubit unitary operator) controlled by 2nd qubit in |0> state
+        qml.PauliX(wires=wires[1])
+        qml.CRot(params[2], params[3], params[4], wires=[wires[1],wires[0]])
+        qml.PauliX(wires=wires[1])
+
+        # # Controlled-Rotation gate (arbitrary single-qubit unitary operator) controlled by 2nd qubit in |1> state
+        qml.CRot(params[5], params[6], params[7], wires=[wires[1],wires[0]])
 
 
     def three_element_povm(self, params, wires): 
-        # First arbitrary unitary gate
-        qml.Rot(params[0], params[1], params[2], wires=wires[0])
-        #qml.CRot(params[0], params[1], params[2], wires=[wires[1], wires[0]])
 
-        # CC-RY gate controlled by |01> state 
         qml.PauliX(wires=wires[0])
-        self.CCRY(params[3], wires=[wires[0], wires[1], wires[2]])
+        self.CCRY(params[0], wires=[wires[0], wires[1], wires[2]])
         qml.PauliX(wires=wires[0])
+        self.CCRY(params[1], wires=[wires[0], wires[1], wires[2]])
 
-        # CC-RY gate controlled by |11> state
-        self.CCRY(params[4], wires=[wires[0], wires[1], wires[2]])
+        qml.PauliX(wires=wires[2])
+        self.CCRot(params[2], params[3], params[4], wires=[wires[2],wires[1],wires[0]])
+        qml.PauliX(wires=wires[2])
+        self.CCRot(params[5], params[6], params[7], wires=[wires[2],wires[1],wires[0]])
 
 
     def CCRY(self, phi, wires):
@@ -192,12 +200,14 @@ class SingleQubitPOVM(State_Preparation):
             #self.initial_state(wires=[self.wires[0], self.wires[-1]])
             self.state_prepared_on_circuit(wires=[self.wires[0], self.wires[-1]])
 
+        # arbitrary rotation
+        self.first_U(params=params[:3], wire=self.wires[0])
 
         # two-element POVM module
-        self.two_element_povm(params=params[:5], wires=[self.wires[0], self.wires[1]])
+        self.two_element_povm(params=params[3:], wires=[self.wires[0], self.wires[1]])
         
         if self.n_outcome == 3:
-            self.three_element_povm(params[5:], wires=[self.wires[0], self.wires[1], self.wires[2]])
+            self.three_element_povm(params[3 + 8:], wires=[self.wires[0], self.wires[1], self.wires[2]])
         
         
         if np.isclose(self.bloch_norm, 1):
@@ -230,8 +240,8 @@ class POVM_clf():
         self.n_outcome = n
 
         # initial random parameters
-        np.random.seed(9)
-        self.povm_params = 4 * np.pi * np.random.random([(5 * (n-1))])
+        np.random.seed(3)
+        self.povm_params = 4 * np.pi * np.random.random([(3 + 8 * (n-1))])
         # Prior Probabilities for each state
         self.prior_probs = [1/self.n_outcome] * self.n_outcome
     
@@ -299,38 +309,38 @@ class POVM_clf():
         
 
     def unitaries(self):
-        res = []
+        U = qml.Rot(self.povm_params[0], self.povm_params[1], self.povm_params[2], wires=100).matrix
+        res = [U]
         for i in range(self.n_outcome-1):
-            U = qml.Rot(self.povm_params[0 + i*5], self.povm_params[1 + i*5], self.povm_params[2 + i*5], wires=100).matrix
-            Ry0 = qml.RY(self.povm_params[3 + i*5], wires=100).matrix
-            Ry1 = qml.RY(self.povm_params[4 + i*5], wires=100).matrix
-
-            res += [U, Ry0, Ry1]
+            Ry0 = qml.RY(self.povm_params[3 + i*8], wires=100).matrix
+            Ry1 = qml.RY(self.povm_params[4 + i*8], wires=100).matrix
+            V0 = qml.Rot(self.povm_params[5 + i*8], self.povm_params[6 + i*8], self.povm_params[7 + i*8], wires=100).matrix
+            V1 = qml.Rot(self.povm_params[8 + i*8], self.povm_params[9 + i*8], self.povm_params[10 + i*8], wires=100).matrix
+            res += [Ry0, Ry1, V0, V1]
 
         return res
 
 
     def kraus_op(self):
         if self.n_outcome == 2:
-            rots = self.unitaries()
-            U = rots[0]
+            U, _, _, V0, V1 = self.unitaries()
             D0 = np.diag([np.cos(self.povm_params[3]/2), np.cos(self.povm_params[4]/2)])
             D1 = np.diag([np.sin(self.povm_params[3]/2), np.sin(self.povm_params[4]/2)])
-            K0 = np.dot(D0, U)
-            K1 = np.dot(D1, U)
+            K0 = np.dot(np.dot(V0, D0), U)
+            K1 = np.dot(np.dot(V1, D1), U)
 
             return K0, K1
 
         elif self.n_outcome == 3:
-            U0, _, _, U1, _, _ = self.unitaries()
+            U, _, _, V00, V01, _, _, V10, V11 = self.unitaries()
             D00 = np.diag([np.cos(self.povm_params[3]/2), np.cos(self.povm_params[4]/2)])
             D01 = np.diag([np.sin(self.povm_params[3]/2), np.sin(self.povm_params[4]/2)])
-            D10 = np.diag([np.cos(self.povm_params[8]/2), np.cos(self.povm_params[9]/2)])
-            D11 = np.diag([np.sin(self.povm_params[8]/2), np.sin(self.povm_params[9]/2)])
-            K0 = np.dot(D00, U0)
-            _mid = np.dot(D01, U0)
-            K1 = np.dot(np.dot(D10, U1),_mid)
-            K2 = np.dot(np.dot(D11, U1),_mid)
+            D10 = np.diag([np.cos(self.povm_params[11]/2), np.cos(self.povm_params[12]/2)])
+            D11 = np.diag([np.sin(self.povm_params[11]/2), np.sin(self.povm_params[12]/2)])
+            K0 = np.dot(np.dot(V00, D00), U)
+            _mid = np.dot(np.dot(V01, D01), U)
+            K1 = np.dot(np.dot(V10,D10),_mid)
+            K2 = np.dot(np.dot(V11,D11),_mid)
 
             return K0, K1, K2
 
@@ -357,6 +367,8 @@ class POVM_clf():
 
         med = 1 - np.sum([self.prior_probs[i] * np.trace(np.dot(self.density_matrices[i], res[i])) for i in range(self.n_outcome)])
         return res, np.real(med)
+
+
 
 
 def state_2_bloch(state_vec):
