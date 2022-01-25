@@ -2,6 +2,8 @@ import time
 import pennylane as qml
 from pennylane import numpy as np
 from scipy.linalg import sqrtm
+
+import pandas as pd
 #dev = qml.device('qiskit.aer', wires=2)
 #dev = qml.device('qiskit.ibmq', wires=2, shots=8192, ibmqx_token="e942e97ce86ca8c3609a4053fe6762ec3db17c41895b2d85d6a3560a1156501d57db36753f99138ecb32dca58a97ae5b38005ad39855dd92ab0e86cef852c1a2")
 
@@ -225,15 +227,15 @@ class SingleQubitPOVM(State_Preparation):
 
 
 class POVM_clf():
-    def __init__(self, n, wires, bloch_vecs, devs):
+    def __init__(self, n, wires, devs, a_priori_probs, bloch_vecs):
         # number of outcomes
         self.n_outcome = n
 
         # initial random parameters
         np.random.seed(9)
-        self.povm_params = 4 * np.pi * np.random.random([(5 * (n-1))])
+        self.povm_params = 2 * np.pi * np.random.random([(5 * (n-1))])
         # Prior Probabilities for each state
-        self.prior_probs = [1/self.n_outcome] * self.n_outcome
+        self.a_priori_probs = a_priori_probs
     
         
         self.density_matrices = []
@@ -258,7 +260,7 @@ class POVM_clf():
     def cost_fn(self, x):
         probs_povm = self.qnodes(x, parallel=True)
 
-        q = self.prior_probs
+        q = self.a_priori_probs
 
         if self.n_outcome == 2:
             res = 1 - (q[0] * probs_povm[0][0] + q[1] * probs_povm[1][1])
@@ -287,7 +289,7 @@ class POVM_clf():
 
 
     def spectral_decomp(self, types='exact'):
-        q = self.prior_probs
+        q = self.a_priori_probs
         rho = self.density_matrices if types == 'exact' else self.output_density_matrices
 
         lambdas, povm_bases = np.linalg.eig(q[0]*rho[0] - q[1]*rho[1])
@@ -309,7 +311,7 @@ class POVM_clf():
 
         return res
 
-
+    # Kraus Operator
     def kraus_op(self):
         if self.n_outcome == 2:
             rots = self.unitaries()
@@ -334,7 +336,7 @@ class POVM_clf():
 
             return K0, K1, K2
 
-    
+    # Poisitive Operator Valued Measurement
     def povm(self):
         if self.n_outcome == 2:
             K0, K1 = self.kraus_op()
@@ -349,14 +351,43 @@ class POVM_clf():
             E2 = np.dot(K2.conj().T, K2)
             return E0, E1, E2
 
-
-    def sq_rt_m(self):
-        rho_tot = (1/3) * np.sum(self.density_matrices, axis=0)
+    # Pretty Good Measurement
+    def pgm(self): 
+        rho_tot = (1/self.n_outcome) * np.sum(self.density_matrices, axis=0)
         rho_inv_sqrt = np.linalg.inv(sqrtm(rho_tot))
-        res = [np.dot(np.dot(rho_inv_sqrt, self.prior_probs[i] * self.density_matrices[i]),rho_inv_sqrt) for i in range(self.n_outcome)]
+        res = [np.dot(np.dot(rho_inv_sqrt, self.a_priori_probs[i] * self.density_matrices[i]),rho_inv_sqrt) for i in range(self.n_outcome)]
 
-        med = 1 - np.sum([self.prior_probs[i] * np.trace(np.dot(self.density_matrices[i], res[i])) for i in range(self.n_outcome)])
+        med = 1 - np.sum([self.a_priori_probs[i] * np.trace(np.dot(self.density_matrices[i], res[i])) for i in range(self.n_outcome)])
         return res, np.real(med)
+
+
+    def res_table(self):
+        rho = self.density_matrices
+        rho_pd = [pd.DataFrame(rho[i], columns=['rho_i', ''], index=['i='+str(i),'']) for i in range(self.n_outcome)]
+        rho_pd = pd.concat(rho_pd)
+
+        E = self.povm()
+        E_pd = [pd.DataFrame(E[i], columns=['E_i', ''], index=['i='+str(i),'']) for i in range(self.n_outcome)]
+        E_pd = pd.concat(E_pd)
+        tr_E_pd = [pd.DataFrame(['',np.real(np.trace(np.dot(rho[i], E[i])))], columns=['Tr[rho_i.E_i]'], index=['i='+str(i),'']) for i in range(self.n_outcome)]
+        tr_E_pd = pd.concat(tr_E_pd)
+
+        #K = self.kraus_op()
+        #K_pd = [pd.DataFrame(K[i], columns=['K_i', ''], index=['i='+str(i),'']) for i in range(3)]
+        #K_pd = pd.concat(K_pd)
+
+        pgm, _ = self.pgm()
+        pgm_pd = [pd.DataFrame(pgm[i], columns=['PGM_i', ''], index=['i='+str(i),'']) for i in range(self.n_outcome)]
+        pgm_pd = pd.concat(pgm_pd)
+        tr_pgm_pd = [pd.DataFrame(['',np.real(np.trace(np.dot(rho[i], pgm[i])))], columns=['Tr[rho_i.PGM_i]'], index=['i='+str(i),'']) for i in range(self.n_outcome)]
+        tr_pgm_pd = pd.concat(tr_pgm_pd)
+
+        res_pd = pd.concat([rho_pd, E_pd, tr_E_pd, pgm_pd, tr_pgm_pd], axis=1)
+        pd.options.display.float_format = '{:.4f}'.format #display decimals
+
+        return res_pd
+
+
 
 
 def state_2_bloch(state_vec):
