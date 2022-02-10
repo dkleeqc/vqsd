@@ -226,6 +226,161 @@ class SingleQubitPOVM(State_Preparation):
 
 
 
+class TwoQubitPOVM():
+    def __init__(self, n=None, two_bloch_vecs=None):
+        self.two_bloch_vecs = two_bloch_vecs
+        #self.n_outcome = n
+
+
+    def SU4(self, params, wires):
+        # two-qubit SU(4) gates designed by V. V. Shende et al., PRA 69 062321 (2004)
+        qml.Rot(params[0], params[1], params[2], wires=wires[0])
+        qml.Rot(params[3], params[4], params[5], wires=wires[1])
+
+        qml.CNOT(wires=[wires[1], wires[0]])
+
+        qml.RZ(params[6], wires=wires[0])
+        qml.RY(params[7], wires=wires[1])
+
+        qml.CNOT(wires=[wires[0], wires[1]])
+
+        qml.RY(params[8], wires=wires[1])
+        qml.CNOT(wires=[wires[1], wires[0]])
+
+        qml.Rot(params[9], params[10], params[11], wires=wires[0])
+        qml.Rot(params[12], params[13], params[14], wires=wires[1])
+
+
+    def CCRY(self, phi, wires):
+        # 
+        phi = phi/2
+        qml.CRY(phi, wires=[wires[1], wires[2]])
+        qml.CNOT(wires=[wires[0], wires[1]])
+        qml.CRY((-1)*phi, wires=[wires[1], wires[2]])
+        qml.CNOT(wires=[wires[0], wires[1]])
+        qml.CRY(phi, wires=[wires[0], wires[2]])
+
+
+    def UCCRY(self, params, wires):
+        qml.PauliX(wires=wires[0])
+        qml.PauliX(wires=wires[1])
+        self.CCRY(phi=params[0], wires=[wires[0], wires[1], wires[2]])
+        qml.PauliX(wires=wires[1])
+        qml.PauliX(wires=wires[0])
+        
+        qml.PauliX(wires=wires[0])
+        self.CCRY(phi=params[1], wires=[wires[0], wires[1], wires[2]])
+        qml.PauliX(wires=wires[0])
+
+        qml.PauliX(wires=wires[1])
+        self.CCRY(phi=params[2], wires=[wires[0], wires[1], wires[2]])
+        qml.PauliX(wires=wires[1])
+
+        self.CCRY(phi=params[3], wires=[wires[0], wires[1], wires[2]])
+
+
+    def two_element_povm(self, params, wires):
+        self.SU4(params[:15], wires=[wires[0],wires[1]])
+        self.UCCRY(params[15:19], wires=[wires[0],wires[1],wires[2]])
+
+
+    def C2ePOVM(self, params, wires):
+        ctrl_2ePOVM = qml.ctrl(self.two_element_povm, control=wires[0])
+        ctrl_2ePOVM(params, wires=[wires[1],wires[2],wires[3]])
+
+
+    def four_element_povm(self, params, wires):
+        self.two_element_povm(params[:19], wires=[wires[0],wires[1],wires[2]])
+        qml.PauliX(wires=wires[2])
+        self.C2ePOVM(params[19:38], wires=[wires[2],wires[0],wires[1],wires[3]])
+        qml.PauliX(wires=wires[2])
+        self.C2ePOVM(params[38:], wires=[wires[2],wires[0],wires[1],wires[3]])
+
+
+    def povm_probs(self, params):
+        if len(np.array(self.two_bloch_vecs)) == 2:
+            for i, vec in enumerate(self.two_bloch_vecs):
+                State_Preparation(vec).state_prepared_on_circuit(wires=self.wires[i])
+
+        # four-element POVMs
+        self.four_element_povm(params, [self.wires[0], self.wires[1], self.wires[2], self.wires[3]])
+        
+        return qml.probs(wires=self.wires[2:])
+
+
+    # "Performing POVM on init_state(bloch_vec)"    
+    def __call__(self, wires=None, dev=None):
+        # wires
+        self.wires = wires
+
+        return qml.QNode(self.povm_probs, dev)
+
+
+    """
+    def run_expval(self):
+        return qml.expval(qml.Identity(0) @ qml.PauliZ(1))
+    """
+
+
+
+
+class POVM_clf2():
+    def __init__(self, n, wires, devs, a_priori_probs, bloch_vecs):
+        # number of outcomes
+        self.n_outcome = n
+
+        # initial random parameters
+        np.random.seed(9)
+        self.povm_params = 2 * np.pi * np.random.random([57])
+        # Prior Probabilities for each state
+        self.a_priori_probs = a_priori_probs
+    
+        self.density_matrices = []
+        self.output_bloch_vecs = []
+
+        self.qnodes = qml.QNodeCollection()
+        for i in range(self.n_outcome):
+            # State Preparation as declaring an instance
+            povm_circ = TwoQubitPOVM(n=self.n_outcome, bloch_vec=bloch_vecs[i])
+
+            # Construct povm circuit whose output is the probability of a measurement outcome on ancilla qubits
+            qnode = povm_circ(wires=wires, dev=devs[i]) # print(qnode(self.povm_params))
+            self.qnodes.append(qnode)
+
+
+    def cost_fn(self, x):
+        probs_povm = self.qnodes(x, parallel=True)
+
+        q = self.a_priori_probs
+
+        if self.n_outcome == 4:
+            res = 1 - (q[0] * probs_povm[0][0] + q[1] * probs_povm[1][1] + q[2] * probs_povm[2][2])
+        #return res
+        return probs_povm
+
+
+    def run_opt(self, steps=120):
+        # initialize the optimizer
+        opt = qml.GradientDescentOptimizer(stepsize=0.4)
+
+        # cost fn for initial random params
+        cost_list = [self.cost_fn(self.povm_params)]
+        print("Cost(init_params)    : {: .7f}".format(cost_list[0]))
+
+        # update the circuit parameters
+        for i in range(steps):     # set the number of steps
+            self.povm_params = opt.step(self.cost_fn, self.povm_params)
+            cost_list.append(self.cost_fn(self.povm_params))
+            if (i+1) % 20 == 0:
+                print("Cost after step {:5d}: {: .7f}".format(i + 1, cost_list[i + 1]))
+
+        #print("Optimized rotation angles: {}".format(self.povm_params))
+        return cost_list
+
+
+
+
+
 class POVM_clf():
     def __init__(self, n, wires, devs, a_priori_probs, bloch_vecs):
         # number of outcomes
@@ -237,10 +392,10 @@ class POVM_clf():
         # Prior Probabilities for each state
         self.a_priori_probs = a_priori_probs
     
-        
         self.density_matrices = []
         self.output_bloch_vecs = []
         self.output_density_matrices = []
+
         self.qnodes = qml.QNodeCollection()
         for i in range(self.n_outcome):
             # State Preparation as declaring an instance
