@@ -491,17 +491,17 @@ class TwoQubitPOVM():
         self.C2ePOVM(params[38:], wires=[wires[2],wires[0],wires[1],wires[3]])
 
 
-    def __call__(self, num_povms=4, input_circ=None, input_circ_params=None):
+    def __call__(self, num_povms=4, init_circ=None, init_circ_params=None):
         self.num = int(num_povms)
-        self.input_circ = input_circ
-        self.input_circ_params = input_circ_params
+        self.init_circ = init_circ
+        self.init_circ_params = init_circ_params
         
         return qml.QNode(self.povm_probs, self.dev)
 
 
     def povm_probs(self, params):
         "State Preparation on circuit" 
-        self.input_circ(wires=[self.wires[0],self.wires[1]], circ_params=self.input_circ_params)
+        self.init_circ(wires=[self.wires[0],self.wires[1]], circ_params=self.init_circ_params)
 
 
         "Four-element POVMs"
@@ -552,7 +552,7 @@ class POVM_iris():
         self.qnodes = qml.QNodeCollection()
 
     
-    def fit(self, X, y):
+    def fit(self, X, y, enc='amplitude'):
         self.num_qubits_encoded = int(np.ceil(np.log(len(X[0])) / np.log(2)))
 
 
@@ -562,8 +562,12 @@ class POVM_iris():
             povm_circ = TwoQubitPOVM(wires=self.povm_wires, dev=cdev)
             
             # Construct povm circuit whose output is the probability of a measurement outcome on ancilla qubits
-            input_circ_params = X[i]
-            qnode = povm_circ(self.num, self.amplitude_encoding, input_circ_params)
+            if enc == 'amplitude':
+                qnode = povm_circ(self.num, self.amplitude_encoding, X[i]) # init_circ_params = X[i]
+            
+            elif enc == 'qfeat':
+                qnode = povm_circ(self.num, self.quantum_feature, X[i])
+
             # print(qnode(self.povm_params))
             self.qnodes.append(qnode)
 
@@ -578,10 +582,76 @@ class POVM_iris():
     def amplitude_encoding(self, wires, circ_params):
         qml.AmplitudeEmbedding(features=circ_params, wires=wires, normalize=True)
 
+    
+    def quantum_feature(self, wires, circ_params, layer=1):
+        #parameter Feature Mapping
+        features = self.feature_map(circ_params)
+
+        for _ in range(layer):
+            #XI
+            qml.RX(features[0,0], wires=wires[0])
+
+            #XX
+            qml.Hadamard(wires=wires[0])
+            qml.Hadamard(wires=wires[1])
+            qml.CNOT(wires=[wires[0],wires[1]])
+            qml.RZ(features[0,1], wires=wires[1])
+            qml.CNOT(wires=[wires[0],wires[1]])
+            qml.Hadamard(wires=wires[0])
+            qml.Hadamard(wires=wires[1])
+
+            #IX
+            qml.RX(features[1,1], wires=wires[1])
+
+            #ZX
+            qml.Hadamard(wires=wires[1])
+            qml.CNOT(wires=[wires[0],wires[1]])
+            qml.RZ(features[1,2], wires=wires[1])
+            qml.CNOT(wires=[wires[0],wires[1]])
+            qml.Hadamard(wires=wires[1])
+
+            #ZI
+            qml.RZ(features[2,2], wires=wires[0])
+
+            #ZZ
+            qml.CNOT(wires=[wires[0],wires[1]])
+            qml.RZ(features[2,3], wires=wires[1])
+            qml.CNOT(wires=[wires[0],wires[1]])
+
+            #IZ
+            qml.RZ(features[3,3], wires=wires[1])
+
+            #XZ
+            qml.Hadamard(wires=wires[0])
+            qml.CNOT(wires=[wires[0],wires[1]])
+            qml.RZ(features[0,3], wires=wires[1])
+            qml.CNOT(wires=[wires[0],wires[1]])
+            qml.Hadamard(wires=wires[0])
+
+
+    def feature_map(self, x, types='mult'):
+        phi = np.diag(x)
+        for i in range(len(x)):
+            for j in range(1+i, len(x)):
+                if types == 'mult':
+                    phi[i,j] = x[i] * x[j]
+                elif types == 'binflipmult':
+                    phi[i,j] = (np.pi/2) * (1-x[i]) * (1-x[j])
+                elif types == 'binflipmult':
+                    phi[i,j] = (np.pi/2) * (1-x[i]) * (1-x[j])
+                elif types == 'gaussian':
+                    phi[i,j] = np.exp((x[i]-x[j])**2/(8/np.log(np.pi)))
+                elif types == 'invcoscos':
+                    phi[i,j] = np.pi / (3 * np.cos(x[i]) * np.cos(x[j]))
+                elif types == 'coscos':
+                    phi[i,j] = np.pi * np.cos(x[i]) * np.cos(x[j])
+
+        return phi
+
 
     def cost_fn(self, params, types='err'):
         #print(types)
-        probs_povm = self.qnodes(params)#, parallel=True)
+        probs_povm = self.qnodes(params)
         q = self.a_priori_probs
 
         res = 0 if types == 'suc' else 1
@@ -633,7 +703,7 @@ class POVM_iris():
         opt = qml.AdamOptimizer()
 
         # cost fn for initial random params
-        cost_list = [self.cost_fn(self.povm_params, )]
+        cost_list = [self.cost_fn(self.povm_params)]
         print("Cost(init_params)    : {: .7f}".format(cost_list[0]))
 
         # update the circuit parameters
@@ -697,7 +767,7 @@ class POVM_iris():
         self.cost_convg = [cost0_list, cost1_list, cost2_list]
 
 
-    def predict(self, X_test):
+    def predict(self, X_test, enc='amplitude'):
         qnodes_predict = qml.QNodeCollection()
 
         for x in X_test:
@@ -706,7 +776,12 @@ class POVM_iris():
             povm_circ = TwoQubitPOVM(wires=self.povm_wires, dev=cdev) 
         
             # Construct povm circuit whose output is the probability of a measurement outcome on ancilla qubits
-            qnode = povm_circ(self.num, self.amplitude_encoding, x)
+            if enc == 'amplitude':
+                qnode = povm_circ(self.num, self.amplitude_encoding, x) # init_circ_params = X[i]
+            
+            elif enc == 'qfeat':
+                qnode = povm_circ(self.num, self.quantum_feature, x)
+
 
             qnodes_predict.append(qnode)
         
