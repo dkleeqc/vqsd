@@ -552,7 +552,13 @@ class POVM_iris():
         self.qnodes = qml.QNodeCollection()
 
     
-    def fit(self, X, y, enc='amplitude'):
+    def fit(self, X, y, **kwargs):
+        self.enc_type = kwargs['enc'] if 'enc' in kwargs.keys() else 'amplitude'
+        if self.enc_type == 'qfeat': 
+            self.layer = kwargs['layer'] if 'layer' in kwargs.keys() else 1
+            self.feat_type = kwargs['feat_type'] if 'feat_type' in kwargs.keys() else 'mult'
+
+
         self.num_qubits_encoded = int(np.ceil(np.log(len(X[0])) / np.log(2)))
 
 
@@ -562,10 +568,10 @@ class POVM_iris():
             povm_circ = TwoQubitPOVM(wires=self.povm_wires, dev=cdev)
             
             # Construct povm circuit whose output is the probability of a measurement outcome on ancilla qubits
-            if enc == 'amplitude':
+            if self.enc_type == 'amplitude':
                 qnode = povm_circ(self.num, self.amplitude_encoding, X[i]) # init_circ_params = X[i]
             
-            elif enc == 'qfeat':
+            elif self.enc_type == 'qfeat':
                 qnode = povm_circ(self.num, self.quantum_feature, X[i])
 
             # print(qnode(self.povm_params))
@@ -583,11 +589,11 @@ class POVM_iris():
         qml.AmplitudeEmbedding(features=circ_params, wires=wires, normalize=True)
 
     
-    def quantum_feature(self, wires, circ_params, layer=1):
+    def quantum_feature(self, wires, circ_params):
         #parameter Feature Mapping
-        features = self.feature_map(circ_params)
+        features = self.feature_map(circ_params, types=self.feat_type)
 
-        for _ in range(layer):
+        for _ in range(self.layer):
             #XI
             qml.RX(features[0,0], wires=wires[0])
 
@@ -633,10 +639,10 @@ class POVM_iris():
         phi = np.diag(x)
         for i in range(len(x)):
             for j in range(1+i, len(x)):
-                if types == 'mult':
-                    phi[i,j] = x[i] * x[j]
-                elif types == 'binflipmult':
-                    phi[i,j] = (np.pi/2) * (1-x[i]) * (1-x[j])
+                if types == 'pidiffmult':
+                    phi[i,j] = (np.pi - x[i]) * (np.pi - x[j])
+                elif types == 'mult':
+                    phi[i,j] = np.pi * x[i] * x[j]
                 elif types == 'binflipmult':
                     phi[i,j] = (np.pi/2) * (1-x[i]) * (1-x[j])
                 elif types == 'gaussian':
@@ -645,7 +651,8 @@ class POVM_iris():
                     phi[i,j] = np.pi / (3 * np.cos(x[i]) * np.cos(x[j]))
                 elif types == 'coscos':
                     phi[i,j] = np.pi * np.cos(x[i]) * np.cos(x[j])
-
+                else:
+                    raise ValueError("The available input 'types' is ['mult', 'binflipmult', 'gaussian', 'invcoscos', 'coscos'].")
         return phi
 
 
@@ -711,7 +718,7 @@ class POVM_iris():
             self.povm_params = opt.step(self.cost_fn, self.povm_params)
             cost_list.append(self.cost_fn(self.povm_params))
             if (i+1) % 20 == 0:
-                print("Cost after step {:5d}: {: .7f}".format(i + 1, cost_list[i + 1]))
+                print("Cost after step {:4d} : {: .7f}".format(i + 1, cost_list[i + 1]))
 
             if i>1 and cost_list[i-1] - cost_list[i] < 1e-7:
                 break
@@ -767,7 +774,7 @@ class POVM_iris():
         self.cost_convg = [cost0_list, cost1_list, cost2_list]
 
 
-    def predict(self, X_test, enc='amplitude'):
+    def predict(self, X_test):
         qnodes_predict = qml.QNodeCollection()
 
         for x in X_test:
@@ -776,10 +783,10 @@ class POVM_iris():
             povm_circ = TwoQubitPOVM(wires=self.povm_wires, dev=cdev) 
         
             # Construct povm circuit whose output is the probability of a measurement outcome on ancilla qubits
-            if enc == 'amplitude':
+            if self.enc_type == 'amplitude':
                 qnode = povm_circ(self.num, self.amplitude_encoding, x) # init_circ_params = X[i]
             
-            elif enc == 'qfeat':
+            elif self.enc_type == 'qfeat':
                 qnode = povm_circ(self.num, self.quantum_feature, x)
 
 
@@ -1021,75 +1028,6 @@ class POVM_Clf_SDP():
 
         return med_value, K_opt
 
-    def __call__(self, init_states, a_priori_probs):
-        
-        if self.dim != len(init_states[0]):
-            raise ValueError("The dimension of POVM != The dimension of quantum state")
-        """
-        elif self.num != len(init_states):
-            raise ValueError("The number of POVMS != The number of quantum states")
-        """
-        
-        
-
-        self.init_rhos = [np.outer(init_states[i], np.conj(init_states[i])) for i in range(self.num)]
-        self.q_rho = [a_priori_probs[i] * self.init_rhos[i] for i in range(self.num)]
-
-        return self.Primal() if self.problem == 'Primal' else self.Dual()
-
-
-
-
-
-class POVM_iris_SDP():
-    def __init__(self, dim_povm=2, num_povms=2, problem_type='Primal'):
-        self.problem = problem_type
-        self.dim = dim_povm
-        self.num = num_povms
-
-
-    def Primal(self):
-        # Create num dim x dim matrix variables
-        E = [cp.Variable((dim, dim), hermitian=True) for x in range(self.num)]
-
-        # Create constraints
-        ## Equality Constraints
-        sum_all_E = 0
-        for i in range(self.num):
-            sum_all_E += E[i]
-        constraints = [sum_all_E == np.eye(dim)]
-        ## Inequality Constraints
-        constraints += [
-            E[i] >> 0 for i in range(self.num)
-        ]
-
-        # Form an objective function.
-        obj = 0
-        for i in range(num_state):
-            obj += cp.real(cp.trace(E[y_train[i]] @ q_rho[i]))
-
-        prob = cp.Problem(cp.Maximize(obj), constraints)
-        prob.solve()
-
-        print("Opt is Done. \nStatus:", prob.status)
-        E_opt = [E[i].value for i in range(num_povm)]
-        med_value = 1 - prob.value
-
-        return med_value, E_opt
-    """
-    def Dual(self):
-
-        K = cp.Variable((self.dim,self.dim), hermitian=True)
-        constraints = [K - self.q_rho[i] >> 0 for i in range(self.num)]
-        prob = cp.Problem(cp.Minimize(cp.real(cp.trace(K))), constraints)
-        prob.solve()
-
-        print("Opt is Done. \nStatus:", prob.status)
-        K_opt = K.value
-        med_value = 1 - prob.value
-
-        return med_value, K_opt
-    """
     def __call__(self, init_states, a_priori_probs):
         
         if self.dim != len(init_states[0]):
