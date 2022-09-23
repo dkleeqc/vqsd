@@ -2,10 +2,15 @@ import time
 import inspect
 import pennylane as qml
 from pennylane import numpy as np
-from scipy.linalg import sqrtm
+
+from scipy.linalg import sqrtm, expm
 
 import pandas as pd
 import cvxpy as cp
+
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import label_binarize
+from sklearn.metrics import roc_curve, auc
 #dev = qml.device('qiskit.aer', wires=2)
 #dev = qml.device('qiskit.ibmq', wires=2, shots=8192, ibmqx_token="e942e97ce86ca8c3609a4053fe6762ec3db17c41895b2d85d6a3560a1156501d57db36753f99138ecb32dca58a97ae5b38005ad39855dd92ab0e86cef852c1a2")
 
@@ -124,6 +129,21 @@ class State_Preparation():
 
 
 
+
+def rdm(state):
+    res = state.reshape(2,2)
+    return np.dot(res, res.conjugate().T)
+
+
+def rho_2_bloch(rho):
+    bloch_vec = []
+    bloch_vec.append(2*np.real(rho[0,1]))
+    bloch_vec.append(2*np.imag(rho[1,0]))
+    bloch_vec.append(np.real(rho[0,0]-rho[1,1]))
+    
+    return np.array(bloch_vec)
+
+
 def state_2_bloch(state_vec):
     if state_vec[0] < 0:
         for i in range(len(state_vec)):
@@ -170,154 +190,51 @@ def bloch_2_state(bloch_vec=None, output_type='density'):
 
 
 
-class SingleQubitPOVM():
-    # "Performing POVM on init_state(bloch_vec)"
-    def __init__(self, wires=None, dev=None):
-        # wires
-        self.wires = wires
-        self.dev = dev
-
-
-    def two_element_povm(self, params, wires):
-        # First arbitrary unitary gate
-        qml.Rot(params[0], params[1], params[2], wires=wires[0])
-
-        # Controlled-RY gate controlled by first qubit in |0> state
-        qml.PauliX(wires=wires[0])
-        qml.CRY(params[3], wires=[wires[0],wires[1]])
-        qml.PauliX(wires=wires[0])
-        
-        # Controlled-RY gate controlled by first qubit in |1> state
-        qml.CRY(params[4], wires=[wires[0],wires[1]])
-
-
-    def three_element_povm(self, params, wires): 
-        # First arbitrary unitary gate
-        qml.Rot(params[0], params[1], params[2], wires=wires[0])
-        #qml.CRot(params[0], params[1], params[2], wires=[wires[1], wires[0]])
-
-        # CC-RY gate controlled by |00> state 
-        qml.PauliX(wires=wires[1])
-        qml.PauliX(wires=wires[0])
-        self.CCRY(params[3], wires=[wires[0], wires[1], wires[2]])
-        qml.PauliX(wires=wires[0])
-
-        # CC-RY gate controlled by |10> state
-        self.CCRY(params[4], wires=[wires[0], wires[1], wires[2]])
-        qml.PauliX(wires=wires[1])
-
-
-    def C2ePOVM(self, params, wires): 
-        # First arbitrary unitary gate
-        qml.Rot(params[0], params[1], params[2], wires=wires[0])
-        #qml.CRot(params[0], params[1], params[2], wires=[wires[1], wires[0]])
-
-        # CC-RY gate controlled by |00> state 
-        
-        qml.PauliX(wires=wires[0])
-        self.CCRY(params[3], wires=[wires[0], wires[1], wires[2]])
-        qml.PauliX(wires=wires[0])
-
-        # CC-RY gate controlled by |10> state
-        self.CCRY(params[4], wires=[wires[0], wires[1], wires[2]])
-        
-
-
-    def CCRY(self, phi, wires):
-        # 
-        phi = phi/2
-        qml.CRY(phi, wires=[wires[1], wires[2]])
-        qml.CNOT(wires=[wires[0], wires[1]])
-        qml.CRY((-1)*phi, wires=[wires[1], wires[2]])
-        qml.CNOT(wires=[wires[0], wires[1]])
-        qml.CRY(phi, wires=[wires[0], wires[2]])
-
-
-    def CCRot(self, phi, theta, omega, wires):
-        phi, theta, omega = phi/2, theta/2, omega/2
-        qml.CRot(phi, theta, omega, wires=[wires[1], wires[2]])
-        qml.CNOT(wires=[wires[0], wires[1]])
-        qml.CRot((-1)*omega, (-1)*theta, (-1)*phi, wires=[wires[1], wires[2]])
-        qml.CNOT(wires=[wires[0], wires[1]])
-        qml.CRot(phi, theta, omega, wires=[wires[0], wires[2]])
-
-
-    # "Performing POVM on init_state(bloch_vec)"    
-    def __call__(self, num_povms=2, input_state=None, state_wires=None):
-        self.num = int(num_povms)
-        #self.input_type = input_type
-        self.input_state = input_state
-        self.state_wires = state_wires
-        
-        
-        return qml.QNode(self.povm_probs, self.dev)
-
-
-    def povm_probs(self, params): 
-        
-
-        "State Preparation on circuit"
-        self.input_state(wires=self.state_wires)
-        
-        " two-element POVM module "
-        self.two_element_povm(params=params[:5], wires=[self.wires[0], self.wires[1]])
-        
-        if self.num > 2:
-            #self.three_element_povm(params[5:], wires=[self.wires[0], self.wires[1], self.wires[2]])
-            qml.PauliX(wires=self.wires[1])
-            self.C2ePOVM(params[5:10], wires=[self.wires[0], self.wires[1], self.wires[2]])
-            qml.PauliX(wires=self.wires[1])
-
-        elif self.num > 3:
-            self.C2ePOVM(params[10:15], wires=[self.wires[0], self.wires[1], self.wires[2]])
-
-        # number of anciliary qubits for povm
-        # num_ancilla_qubits = int(np.log(self.num)/np.log(2)) + (self.num % 2>0)
-        return qml.probs(wires=self.wires[1:])
-
-
-
-
-
 class POVM_Clf():
     def __init__(self, n, wires, devs, a_priori_probs, input_states, state_wires):
         # number of outcomes
         self.n_outcome = n
 
+        # number of ancillary qubits
+        num_ancilla_qubits = int(np.ceil(np.log(n) / np.log(2)))
+        num_measuring_qubits = int(len(wires) - num_ancilla_qubits)
+
         # Prior Probabilities for each state
         self.a_priori_probs = a_priori_probs
 
         # initial random parameters
-        np.random.seed(9)
-        self.povm_params = 2 * np.pi * np.random.random([(5 * (n-1))])
+        np.random.seed(10)
+        num_params = (2**(2*num_measuring_qubits)-1+2**num_measuring_qubits) * (n-1)
+        self.povm_params = 2 * np.pi * np.random.random([num_params])
+        
+
 
         self.qnodes = qml.QNodeCollection()
         for i in range(self.n_outcome):            
-            povm_circ = SingleQubitPOVM(wires=wires, dev=devs[i])
+            if num_measuring_qubits == 1:
+                povm_circ = SingleQubitPOVM(wires=wires, dev=devs[i])
+            else:
+                povm_circ = TwoQubitPOVM(wires=wires, dev=devs[i])
             
             # Construct povm circuit whose output is the probability of a measurement outcome on ancilla qubits
             qnode = povm_circ(n, input_states[i], state_wires)
-            # print(qnode(self.povm_params))
             self.qnodes.append(qnode)
             
 
     def cost_fn(self, x):
-        probs_povm = self.qnodes(x, parallel=True)
+        probs_povm = self.qnodes(x)
         q = self.a_priori_probs
 
         res = 1
-        bin_len = int(np.ceil(np.log(self.n_outcome)/ np.log(2)))
         for i in range(self.n_outcome):
-            b2d = format(i, '0'+str(bin_len)+'b')
-            inverse = b2d[::-1]
-            d2b = int(inverse, 2)
-            res -= q[i] * probs_povm[i][d2b]
+            res -= q[i] * probs_povm[i][i]
         return res
 
 
     def run_opt(self, steps=1000):
         # initialize the optimizer
-        opt = qml.GradientDescentOptimizer(stepsize=0.4)
+        #opt = qml.GradientDescentOptimizer(stepsize=0.4)
+        opt = qml.AdamOptimizer(stepsize=0.02)
 
         # cost fn for initial random params
         cost_list = [self.cost_fn(self.povm_params)]
@@ -330,7 +247,7 @@ class POVM_Clf():
             if (i+1) % 20 == 0:
                 print("Cost after step {:5d}: {: .7f}".format(i + 1, cost_list[i + 1]))
 
-            if i>1 and cost_list[i-1] - cost_list[i] < 1e-6:
+            if i>1 and cost_list[i-1] - cost_list[i] < 1e-7:
                 break
         #print("Optimized rotation angles: {}".format(self.povm_params))
         return cost_list
@@ -418,6 +335,104 @@ class POVM_Clf():
 
 
 
+class SingleQubitPOVM():
+    # Performing POVM on init_state
+    def __init__(self, wires=None, dev=None):
+        # wires
+        self.wires = wires
+        self.dev = dev
+
+
+    def two_element_povm(self, params, wires):
+        # First arbitrary unitary gate
+        qml.Rot(params[0], params[1], params[2], wires=wires[0])
+
+        # Controlled-RY gate controlled by first qubit in |0> state
+        qml.PauliX(wires=wires[0])
+        qml.CRY(params[3], wires=[wires[0],wires[1]])
+        qml.PauliX(wires=wires[0])
+        
+        # Controlled-RY gate controlled by first qubit in |1> state
+        qml.CRY(params[4], wires=[wires[0],wires[1]])
+
+
+    def C2ePOVM(self, params, wires): 
+        ctrl_2ePOVM = qml.ctrl(self.two_element_povm, control=wires[0])
+        ctrl_2ePOVM(params, wires=[wires[1],wires[2]])
+
+
+    def three_element_povm(self, params, wires): 
+        # First arbitrary unitary gate
+        qml.Rot(params[0], params[1], params[2], wires=wires[0])
+        #qml.CRot(params[0], params[1], params[2], wires=[wires[1], wires[0]])
+
+        # CC-RY gate controlled by |00> state 
+        qml.PauliX(wires=wires[1])
+        qml.PauliX(wires=wires[0])
+        self.CCRY(params[3], wires=[wires[0], wires[1], wires[2]])
+        qml.PauliX(wires=wires[0])
+
+        # CC-RY gate controlled by |10> state
+        self.CCRY(params[4], wires=[wires[0], wires[1], wires[2]])
+        qml.PauliX(wires=wires[1])
+
+
+    def CCRY(self, phi, wires):
+        # 
+        phi = phi/2
+        qml.CRY(phi, wires=[wires[1], wires[2]])
+        qml.CNOT(wires=[wires[0], wires[1]])
+        qml.CRY((-1)*phi, wires=[wires[1], wires[2]])
+        qml.CNOT(wires=[wires[0], wires[1]])
+        qml.CRY(phi, wires=[wires[0], wires[2]])
+
+
+    def CCRot(self, phi, theta, omega, wires):
+        phi, theta, omega = phi/2, theta/2, omega/2
+        qml.CRot(phi, theta, omega, wires=[wires[1], wires[2]])
+        qml.CNOT(wires=[wires[0], wires[1]])
+        qml.CRot((-1)*omega, (-1)*theta, (-1)*phi, wires=[wires[1], wires[2]])
+        qml.CNOT(wires=[wires[0], wires[1]])
+        qml.CRot(phi, theta, omega, wires=[wires[0], wires[2]])
+
+
+    def KrausCirc(self, rank, params, wires):
+        " two-element POVM module "
+        self.two_element_povm(params=params[:5], wires=[wires[0], wires[-1]])
+        
+        if rank > 2:
+            #self.three_element_povm(params[5:], wires=[self.wires[0], self.wires[1], self.wires[2]])
+            qml.PauliX(wires=wires[-1])
+            self.C2ePOVM(params[5:10], wires=[wires[-1], wires[0], wires[1]])
+            qml.PauliX(wires=wires[-1])
+
+        elif rank > 3:
+            self.C2ePOVM(params[5:10], wires=[wires[-1], wires[0], wires[1]])
+            #[10:15]
+
+    # "Performing POVM on init_state(bloch_vec)"    
+    def __call__(self, num_povms=2, init_circ=None, init_circ_wires=None):
+        self.num = int(num_povms)
+        self.init_circ = init_circ
+        self.init_circ_wires = init_circ_wires
+        
+        
+        return qml.QNode(self.povm_probs, self.dev)
+
+
+    def povm_probs(self, params): 
+        "State Preparation on circuit"
+        self.init_circ(wires=self.init_circ_wires)
+        
+        self.KrausCirc(self.num, params, self.wires)
+
+        # number of anciliary qubits for povm
+        return qml.probs(wires=self.wires[1:])
+
+
+
+
+
 class TwoQubitPOVM():
     # "Performing POVM on init_state(bloch_vec)"
     def __init__(self, wires=None, dev=None):
@@ -491,107 +506,69 @@ class TwoQubitPOVM():
         self.C2ePOVM(params[38:], wires=[wires[2],wires[0],wires[1],wires[3]])
 
 
-    def __call__(self, num_povms=4, init_circ=None, init_circ_params=None):
+    def KrausCirc(self, rank, params, wires):
+        "Four-element POVMs"  
+        self.two_element_povm(params[:19], wires=[wires[0],wires[1],wires[-1]])
+        
+        if rank > 2:
+            qml.PauliX(wires=wires[-1])
+            self.C2ePOVM(params[19:38], wires=[wires[-1],wires[0],wires[1],wires[2]])
+            qml.PauliX(wires=wires[-1])
+
+        if rank > 3:
+            self.C2ePOVM(params[19:38], wires=[wires[-1],wires[0],wires[1],wires[2]])
+            #[38:]
+        """
+        if self.num > 4:
+            # Try!!
+        """
+
+
+    def __call__(self, num_povms=4, init_circ=None, init_circ_wires=None):
         self.num = int(num_povms)
         self.init_circ = init_circ
-        self.init_circ_params = init_circ_params
+        self.init_circ_wires = init_circ_wires
         
         return qml.QNode(self.povm_probs, self.dev)
 
 
     def povm_probs(self, params):
         "State Preparation on circuit" 
-        self.init_circ(wires=[self.wires[0],self.wires[1]], circ_params=self.init_circ_params)
+        self.init_circ(wires=self.init_circ_wires)
 
+        self.KrausCirc(self.num, params, self.wires)
 
-        "Four-element POVMs"
-        #self.four_element_povm(params, [self.wires[0], self.wires[1], self.wires[2], self.wires[3]])        
-        self.two_element_povm(params[:19], wires=[self.wires[0],self.wires[1],self.wires[2]])
-        
-        if self.num > 2:
-            qml.PauliX(wires=self.wires[2])
-            self.C2ePOVM(params[19:38], wires=[self.wires[2],self.wires[0],self.wires[1],self.wires[3]])
-            qml.PauliX(wires=self.wires[2])
-
-        if self.num > 3:
-            self.C2ePOVM(params[38:], wires=[self.wires[2],self.wires[0],self.wires[1],self.wires[3]])
-
-        """
-        if self.num > 4:
-            # Try!!
-        """
-
+        "num of ancillary qubits"
+        self.num_ancilla_qubits = int(np.ceil(np.log(self.num) / np.log(2)))
         return qml.probs(wires=self.wires[2:])
 
 
 
 
 
-class POVM_iris():
-    def __init__(self, num_povms, povm_wires):
-        # number of outcomes
-        self.num = num_povms
+class QuantumEmbedding():
+    def __init__(self, wires, **kwargs):
+        self.wires=wires
+
+        self.embedding_type = kwargs['embed'] if 'embed' in kwargs.keys() else 'qfeat'
+        if self.embedding_type == 'qfeat': 
+            self.layer = kwargs['layer'] if 'layer' in kwargs.keys() else 2
+            self.enc_type = kwargs['enc_type'] if 'enc_type' in kwargs.keys() else 'gaussian'
+
+
+    def __call__(self, input_data):
+        if self.embedding_type == 'qfeat':
+            return self.QuantumFeatureMap(input_data)
+        elif self.embedding_type == 'amplitude':
+            return qml.AmplitudeEmbedding(features=input_data, wires=self.wires, normalize=True)
+
         
-        # Performing POVM(wires) on an arbitrary state(state_wires)
-        #self.state_wires = state_wires
-        self.povm_wires = povm_wires
 
-        self.num_ancilla_qubits = int(np.ceil(np.log(self.num) / np.log(2)))
-        num_qubits_to_measure = int(len(self.povm_wires) - self.num_ancilla_qubits)
-        try:
-            num_qubits_to_measure == 2
-        except:
-            ValueError('States to be measured are required to be two qubits!')
+    def QuantumFeatureMap(self, input_data):
+        wires = self.wires
 
-
-        # initial random parameters
-        np.random.seed(20)
-        self.povm_params = 2 * np.pi * np.random.random([(19 * (self.num-1))]) 
-
-        # Prepare QNodeCollection
-        self.qnodes = qml.QNodeCollection()
-
-    
-    def fit(self, X, y, **kwargs):
-        self.enc_type = kwargs['enc'] if 'enc' in kwargs.keys() else 'amplitude'
-        if self.enc_type == 'qfeat': 
-            self.layer = kwargs['layer'] if 'layer' in kwargs.keys() else 1
-            self.feat_type = kwargs['feat_type'] if 'feat_type' in kwargs.keys() else 'mult'
-
-
-        self.num_qubits_encoded = int(np.ceil(np.log(len(X[0])) / np.log(2)))
-
-
-        for i in range(len(X)):
-            cdev = qml.device('default.qubit', wires=self.num_qubits_encoded+self.num_ancilla_qubits)
-
-            povm_circ = TwoQubitPOVM(wires=self.povm_wires, dev=cdev)
-            
-            # Construct povm circuit whose output is the probability of a measurement outcome on ancilla qubits
-            if self.enc_type == 'amplitude':
-                qnode = povm_circ(self.num, self.amplitude_encoding, X[i]) # init_circ_params = X[i]
-            
-            elif self.enc_type == 'qfeat':
-                qnode = povm_circ(self.num, self.quantum_feature, X[i])
-
-            # print(qnode(self.povm_params))
-            self.qnodes.append(qnode)
-
-        # Find a priori probabilities by conuting y_train
-        #unique, counts = np.unique(y, return_counts=True)
-        #self.a_priori_probs = [counts[i]/sum(counts) for i in range(len(counts))]
-        self.a_priori_probs = [1 / len(y)] * len(y)
-        self._y = y
-        self.run_opt()
-
-
-    def amplitude_encoding(self, wires, circ_params):
-        qml.AmplitudeEmbedding(features=circ_params, wires=wires, normalize=True)
-
-    
-    def quantum_feature(self, wires, circ_params):
         #parameter Feature Mapping
-        features = self.feature_map(circ_params, types=self.feat_type)
+        features = self.encoding_fn(input_data, types=self.enc_type)
 
         for _ in range(self.layer):
             #XI
@@ -633,9 +610,11 @@ class POVM_iris():
             qml.RZ(features[0,3], wires=wires[1])
             qml.CNOT(wires=[wires[0],wires[1]])
             qml.Hadamard(wires=wires[0])
+        
+        qml.RX(features[0,0], wires=wires[0])
 
 
-    def feature_map(self, x, types='mult'):
+    def encoding_fn(self, x, types='gaussian'):
         phi = np.diag(x)
         for i in range(len(x)):
             for j in range(1+i, len(x)):
@@ -652,8 +631,227 @@ class POVM_iris():
                 elif types == 'coscos':
                     phi[i,j] = np.pi * np.cos(x[i]) * np.cos(x[j])
                 else:
-                    raise ValueError("The available input 'types' is ['mult', 'binflipmult', 'gaussian', 'invcoscos', 'coscos'].")
+                    raise ValueError("The available input 'types' is ['pidiffmult', 'mult', 'binflipmult', 'gaussian', 'invcoscos', 'coscos'].")
         return phi
+
+
+
+
+
+class DataPOVMCirc:
+    def __init__(self, num_measuring_qubits, num_povms):
+        # number of qubits to measure
+        self.num_measuring_qubits = int(num_measuring_qubits)
+
+        # number of outcomes
+        self.num_povms = num_povms
+        self.num_ancilla_qubits = int(np.ceil(np.log(self.num_povms) / np.log(2)))
+
+        
+        
+    
+    def __call__(self, input_data, **kwargs):
+        self._kwargs = kwargs
+        self.input_data = input_data
+        
+        # number of data-embedded qubits
+        self.num_data_qubits = int(np.ceil(np.log(len(input_data)) / np.log(2)))
+
+        # merging circuit wires and povm wires
+        self.wires = list(range(self.num_data_qubits+self.num_ancilla_qubits))
+        self.povm_wires = self.wires[self.num_data_qubits-self.num_measuring_qubits:] # Wires for performing POVM
+
+        dev = qml.device('default.qubit', wires=self.num_data_qubits+self.num_ancilla_qubits)        
+        return qml.QNode(self.merging_circs, dev)
+
+
+    def merging_circs(self, params):
+        # State Preparation
+        data_wires = list(range(self.num_data_qubits))
+        quFeatmap = QuantumEmbedding(data_wires, enc_type=self._kwargs['enc_type'])
+        quFeatmap(self.input_data)
+
+        # POVM Preparation
+        if self.num_measuring_qubits == 1:
+            povm_circ = SingleQubitPOVM()
+
+        elif self.num_measuring_qubits == 2:
+            povm_circ = TwoQubitPOVM()
+        
+        povm_circ.KrausCirc(rank=self.num_povms, params=params, wires=self.povm_wires)
+
+        # Probability distribution
+        return qml.probs(wires=self.wires[self.num_data_qubits:])
+
+
+
+
+
+class POVMbasedCLF():
+    def __init__(self, num_measuring_qubits, num_povms):
+        self.num_measuring_qubits = int(num_measuring_qubits) # number of qubits to measure
+        self.num_povms = num_povms # number of outcomes
+        
+        # initial random parameters
+        np.random.seed(20)
+        # num_params: (2^n)^2-1 + 2^n : 
+        num_params = (2**(2*num_measuring_qubits)-1+2**num_measuring_qubits) * (num_povms-1)
+        self.povm_params = 2 * np.pi * np.random.random([num_params]) 
+
+        
+    def fit(self, X, y, **kwargs):
+        self.enc_type = kwargs['enc_type'] if 'enc_type' in kwargs.keys() else 'gaussian'
+        
+        # Prepare QNodeCollection
+        self.qnodes = qml.QNodeCollection()
+
+        for x in X:
+            circ = DataPOVMCirc(self.num_measuring_qubits, self.num_povms)
+            qnode = circ(x, enc_type=self.enc_type)
+            self.qnodes.append(qnode)
+
+        # Find a priori probabilities by conuting y_train
+        self.a_priori_probs = [1 / len(y)] * len(y)
+        self._y = y
+
+        # Training POVM circuit to become a classifier.
+        # print(self.qnodes(self.povm_params))
+        self.run_opt()
+
+
+    def cost_fn(self, params, types='err'):
+        #print(types)
+        probs_povm = self.qnodes(params)
+        q = self.a_priori_probs
+
+        res = 0 if types == 'suc' else 1
+        
+        for i in range(len(q)):
+
+            if types == 'err':
+                res -= q[i] * probs_povm[i][self._y[i]]
+                #res -= q[i] * probs_povm[i][y_rev[i]]
+            elif types == 'inc':
+                res -= q[i] * sum(probs_povm[i][:(self.num_povms-1)])
+            elif types == 'suc':
+                res += q[i] * (sum(probs_povm[i]) - probs_povm[i][self._y[i]])
+
+        return res
+
+
+    def run_opt(self, steps=3000):
+        # initialize the optimizer
+        #opt = qml.GradientDescentOptimizer(stepsize=0.4)
+        opt = qml.AdamOptimizer(stepsize=0.02)
+        #opt = qml.AdagradOptimizer(stepsize=0.2)
+
+        # cost fn for initial random params
+        cost_list = [self.cost_fn(self.povm_params)]
+        print("Cost(init_params)    : {: .7f}".format(cost_list[0]))
+
+        # update the circuit parameters
+        for i in range(steps):     # set the number of steps
+            self.povm_params = opt.step(self.cost_fn, self.povm_params)
+            cost_list.append(self.cost_fn(self.povm_params))
+            if (i+1) % 20 == 0:
+                print("Cost after step {:4d} : {: .7f}".format(i + 1, cost_list[i + 1]))
+
+            if i>1 and cost_list[i-1] - cost_list[i] < 1e-7:
+                break
+        #print("Optimized rotation angles: {}".format(self.povm_params))
+        #return cost_list
+        self.cost_convg = cost_list
+
+    
+    def predict(self, X_test):
+        # Prepare QNodeCollection
+        qnodes_predict = qml.QNodeCollection()
+
+        for x in X_test:
+            circ = DataPOVMCirc(self.num_measuring_qubits, self.num_povms)
+            qnode = circ(x, enc_type=self.enc_type)
+            qnodes_predict.append(qnode)
+
+        self.probs_predict = qnodes_predict(self.povm_params)
+
+        return np.array(np.argmax(self.probs_predict, axis=1).tolist())
+
+
+
+#위의 twoqubitPOVM class에서는 input state qubit이 무조건 2개로 고정!
+#아래의 classificatino에서는 data qubits이랑 povm 측정할 qubit의 갯수가 불일치해도 괜찮게 작성하기!
+class POVM_iris():
+    def __init__(self, num_measuring_qubits, num_povms):
+        # number of data-encoded qubits
+        self.num_measuring_qubits = int(num_measuring_qubits)
+
+        # number of outcomes
+        self.num_povms = num_povms
+        self.num_ancilla_qubits = int(np.ceil(np.log(self.num_povms) / np.log(2)))
+
+        # initial random parameters 
+        np.random.seed(20)
+        # num_params: (2^n)^2-1 + 2^n : 
+        num_params = (2**(2*self.num_measuring_qubits)-1+2**self.num_measuring_qubits) * (self.num_povms-1)
+        self.povm_params = 2 * np.pi * np.random.random([num_params]) 
+
+        # Prepare QNodeCollection
+        self.qnodes = qml.QNodeCollection()
+
+    
+    def fit(self, X, y, **kwargs):
+
+        # the number of data-encoded qubits
+        self.num_data_qubits = int(np.ceil(np.log(len(X[0])) / np.log(2)))
+
+        # Declare total_wires and povm_wires
+        self.wires = list(range(self.num_data_qubits+self.num_ancilla_qubits))
+        self.povm_wires = self.wires[self.num_data_qubits-self.num_measuring_qubits:]
+
+        for i in range(len(X)):
+            cdev = qml.device('default.qubit', wires=self.num_data_qubits+self.num_ancilla_qubits)
+
+            # qnode
+            qnode = self.quantemb_povm_qnode(X[i], cdev)
+            print(i)
+            # print(qnode(self.povm_params))
+            self.qnodes.append(qnode)
+
+        # Find a priori probabilities by conuting y_train
+        self.a_priori_probs = [1 / len(y)] * len(y)
+        self._y = y
+
+        # Training POVM circuit to become a classifier.
+        #self.run_opt()
+        print(self.qnodes(self.povm_params))
+
+
+    def quantemb_povm_qnode(self, input_data, dev): 
+        self.datapoint = input_data
+        print(self.datapoint)
+        return qml.QNode(self.quantemb_povm_circ, dev)
+
+    
+    def quantemb_povm_circ(self, params):
+
+        # Quantum Embedding
+        if self.enc_type == 'amplitude':
+            qml.AmplitudeEmbedding(features=input_data, wires=self.wires[:self.num_data_qubits], normalize=True)
+        
+        elif self.enc_type == 'qfeat':
+            self.quantum_feature(wires=self.wires, input_data=self.datapoint)
+
+        # POVM circuit
+        if self.num_measuring_qubits == 1:
+            povm_circ = SingleQubitPOVM()
+
+        elif self.num_measuring_qubits == 2:
+            povm_circ = TwoQubitPOVM()
+            
+        povm_circ.KrausCirc(rank=self.num_povms, params=params, wires=self.povm_wires)
+
+        # Probability distribution
+        return qml.probs(wires=self.wires[self.num_data_qubits:])
 
 
     def cost_fn(self, params, types='err'):
@@ -674,7 +872,7 @@ class POVM_iris():
             if types == 'err':
                 res -= q[i] * probs_povm[i][y_rev[i]]
             elif types == 'inc':
-                res -= q[i] * sum(probs_povm[i][:(self.num-1)])
+                res -= q[i] * sum(probs_povm[i][:(self.num_povms-1)])
             elif types == 'suc':
                 res += q[i] * (sum(probs_povm[i]) - probs_povm[i][y_rev[i]])
         """
@@ -691,7 +889,7 @@ class POVM_iris():
         if x == None: 
             x = self._y
 
-        bin_len = int(np.ceil(np.log(self.num)/ np.log(2)))
+        bin_len = int(np.ceil(np.log(self.num_povms)/ np.log(2)))
 
         d2b_list = []
         for i in range(len(x)):
@@ -707,7 +905,8 @@ class POVM_iris():
     def run_opt(self, steps=3000):
         # initialize the optimizer
         #opt = qml.GradientDescentOptimizer(stepsize=0.4)
-        opt = qml.AdamOptimizer()
+        opt = qml.AdamOptimizer(stepsize=0.02)
+        #opt = qml.AdagradOptimizer(stepsize=0.2)
 
         # cost fn for initial random params
         cost_list = [self.cost_fn(self.povm_params)]
@@ -778,16 +977,16 @@ class POVM_iris():
         qnodes_predict = qml.QNodeCollection()
 
         for x in X_test:
-            cdev = qml.device('default.qubit', wires=self.num_qubits_encoded+self.num_ancilla_qubits) #, shots=1)
+            cdev = qml.device('default.qubit', wires=self.num_data_qubits+self.num_ancilla_qubits) #, shots=1)
 
             povm_circ = TwoQubitPOVM(wires=self.povm_wires, dev=cdev) 
         
             # Construct povm circuit whose output is the probability of a measurement outcome on ancilla qubits
             if self.enc_type == 'amplitude':
-                qnode = povm_circ(self.num, self.amplitude_encoding, x) # init_circ_params = X[i]
+                qnode = povm_circ(self.num_povms, self.amplitude_encoding, x) # init_circ_params = X[i]
             
             elif self.enc_type == 'qfeat':
-                qnode = povm_circ(self.num, self.quantum_feature, x)
+                qnode = povm_circ(self.num_povms, self.quantum_feature, x)
 
 
             qnodes_predict.append(qnode)
@@ -800,13 +999,21 @@ class POVM_iris():
 
 
 
-
-def affine_preprocessing(data):
+def affine_preprocessing(data, minmax='m1-to-p1'):
     # input: list of data
     maxvals, minvals = np.max(data, axis=0), np.min(data, axis=0)
-    slopes = 2 / (maxvals-minvals)
-    maxvals, minvals = maxvals * slopes, minvals * slopes
-    intercepts = np.median([maxvals, minvals], axis=0)
+    if minmax=='m1-to-p1':
+        #slope
+        slopes = 2 / (maxvals-minvals) 
+        #intercepts
+        maxvals, minvals = maxvals * slopes, minvals * slopes
+        intercepts = np.median([maxvals, minvals], axis=0)
+
+    elif minmax=='0-to-2pi':
+        slopes = 2*np.pi / (maxvals-minvals) 
+        #intercepts
+        intercepts = minvals * slopes
+        
     return data * slopes - intercepts
 
 
@@ -1015,6 +1222,7 @@ class POVM_Clf_SDP():
 
         return med_value, E_opt
 
+
     def Dual(self):
 
         K = cp.Variable((self.dim,self.dim), hermitian=True)
@@ -1028,6 +1236,7 @@ class POVM_Clf_SDP():
 
         return med_value, K_opt
 
+
     def __call__(self, init_states, a_priori_probs):
         
         if self.dim != len(init_states[0]):
@@ -1038,8 +1247,9 @@ class POVM_Clf_SDP():
         """
         
         
-
-        self.init_rhos = [np.outer(init_states[i], np.conj(init_states[i])) for i in range(self.num)]
+        if len(init_states[i]).shape == 1:
+            self.init_rhos = [np.outer(init_states[i], np.conj(init_states[i])) for i in range(self.num)]
+        #else: density state
         self.q_rho = [a_priori_probs[i] * self.init_rhos[i] for i in range(self.num)]
 
         return self.Primal() if self.problem == 'Primal' else self.Dual()
@@ -1187,6 +1397,7 @@ def sdp_med(states, num_povm=3):
     print("Opt is Done. \nStatus:", prob.status)
     E_opt = [E[i].value for i in range(num_povm)]
     med_value = prob.value
+    print("Optimal Value:", med_value)
 
     return med_value, E_opt
 
@@ -1225,3 +1436,101 @@ def sdp_mcm(states, num_povm=3):
 
 
     return med_value, Q_opt 
+
+
+def plot_ROC_curve(y_tests, y_scores):
+    n_classes = len(y_scores[0]) 
+    n_classes_ = n_classes if len(y_scores[0]) > 2 else 3
+    y_tests = label_binarize(y_tests, classes=range(n_classes_))
+
+    # Compute ROC curve and ROC area for each class
+    fpr = dict()
+    tpr = dict()
+    roc_auc = dict()
+    for i in range(n_classes):
+        fpr[i], tpr[i], _ = roc_curve(y_tests[:, i], y_scores[:, i])
+        roc_auc[i] = auc(fpr[i], tpr[i])
+
+    plt.figure(figsize=(8,8))
+    lw = 2
+    for i in range(n_classes):
+        plt.plot(
+            fpr[i],
+            tpr[i],
+            #color="darkorange",
+            lw=lw,
+            label="Class %i (AUC = %0.2f)" % (i, roc_auc[i]),
+        )
+    plt.plot([0, 1], [0, 1], color="navy", lw=lw, linestyle="--")
+    plt.xlim([0.0, 1.0])
+    plt.xticks(fontsize=15)
+    plt.ylim([0.0, 1.05])
+    plt.yticks(fontsize=15)
+    plt.xlabel("False Positive Rate", fontsize=18)
+    plt.ylabel("True Positive Rate", fontsize=18)
+    plt.title("ROC curves by using probability distribution", fontsize=20)
+    plt.legend(loc="lower right", fontsize=15)
+    plt.show()
+
+
+def plot_mean_ROC_curve(y_tests, y_scores, n_classes=3, n_splits=5):
+    #n_classes = len(y_scores[0][0])
+    #n_splits = len(y_scores)
+
+    mean_fpr = np.linspace(0, 1, 100)
+    tprs = [[] for _ in range(n_classes)] # tprs[class][k-fold]
+    aucs = [[] for _ in range(n_classes)] # aucs[class][k-fold]
+    
+    for k in range(n_splits): 
+        fpr, tpr, roc_auc = roc_curve_mc(y_tests[k], y_scores[k][:,:3])
+
+        for l in range(n_classes):
+            interp_tpr = np.interp(mean_fpr, fpr[l], tpr[l]) 
+            interp_tpr[0] = 0.0
+            tprs[l].append(interp_tpr)    
+            aucs[l].append(roc_auc[l])
+
+    mean_tprs = dict()
+    for l in range(n_classes):
+        mean_tprs[l] = np.mean(np.array(tprs[l]), axis=0)
+
+    mean_aucs = np.mean(np.array(aucs), axis=1)
+
+    #Plotting
+    plt.figure(figsize=(8,8))
+    lw = 3
+    colors = ['blue','red', 'green']
+    for i in range(n_classes):
+        plt.plot(
+            mean_fpr,
+            mean_tprs[i],
+            color=colors[i],
+            lw=lw,
+            label="Class %i (Mean AUC = %0.3f)" % (i, mean_aucs[i]),
+        )
+    plt.plot([0, 1], [0, 1], color="grey", lw=lw, linestyle="--")
+    plt.xlim([-0.03, 1.03])
+    plt.xticks(fontsize=20)
+    plt.ylim([-0.03, 1.03])
+    plt.yticks(fontsize=20)
+    plt.xlabel("False Positive Rate", fontsize=25)
+    plt.ylabel("True Positive Rate", fontsize=25)
+    plt.title("Mean ROC Curves", fontsize=28)
+    plt.legend(loc="lower right", fontsize=18)
+    plt.savefig('./data/meanROCcurves.png', bbox_inches='tight', transparent=True)
+    plt.show()
+
+
+def roc_curve_mc(y_tests, y_scores):
+    n_classes = len(y_scores[0]) 
+    n_classes_ = n_classes if len(y_scores[0]) > 2 else 3
+    y_tests = label_binarize(y_tests, classes=range(n_classes_))
+
+    # Compute ROC curve and ROC area for each class
+    fpr = dict()
+    tpr = dict()
+    roc_auc = dict()
+    for i in range(n_classes):
+        fpr[i], tpr[i], _ = roc_curve(y_tests[:, i], y_scores[:, i])
+        roc_auc[i] = auc(fpr[i], tpr[i])
+    return fpr, tpr, roc_auc
