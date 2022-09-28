@@ -13,7 +13,7 @@ from sklearn.preprocessing import label_binarize
 from sklearn.metrics import roc_curve, auc
 #dev = qml.device('qiskit.aer', wires=2)
 #dev = qml.device('qiskit.ibmq', wires=2, shots=8192, ibmqx_token="e942e97ce86ca8c3609a4053fe6762ec3db17c41895b2d85d6a3560a1156501d57db36753f99138ecb32dca58a97ae5b38005ad39855dd92ab0e86cef852c1a2")
-
+from IPython.display import display #'display' is not defined so I introduced it here but I'll check this later! 
 
 
 class State_Preparation():
@@ -203,7 +203,7 @@ class POVM_Clf():
         self.a_priori_probs = a_priori_probs
 
         # initial random parameters
-        np.random.seed(10)
+        np.random.seed(1)
         num_params = (2**(2*num_measuring_qubits)-1+2**num_measuring_qubits) * (n-1)
         self.povm_params = 2 * np.pi * np.random.random([num_params])
         
@@ -836,7 +836,7 @@ class POVM_iris():
 
         # Quantum Embedding
         if self.enc_type == 'amplitude':
-            qml.AmplitudeEmbedding(features=input_data, wires=self.wires[:self.num_data_qubits], normalize=True)
+            qml.AmplitudeEmbedding(features=self.datapoint, wires=self.wires[:self.num_data_qubits], normalize=True)
         
         elif self.enc_type == 'qfeat':
             self.quantum_feature(wires=self.wires, input_data=self.datapoint)
@@ -1247,7 +1247,7 @@ class POVM_Clf_SDP():
         """
         
         
-        if len(init_states[i]).shape == 1:
+        if len(init_states[0]).shape == 1:
             self.init_rhos = [np.outer(init_states[i], np.conj(init_states[i])) for i in range(self.num)]
         #else: density state
         self.q_rho = [a_priori_probs[i] * self.init_rhos[i] for i in range(self.num)]
