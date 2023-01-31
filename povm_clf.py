@@ -1498,17 +1498,19 @@ def plot_mean_ROC_curve(y_tests, y_scores, n_classes=3, n_splits=5):
 
     #Plotting
     plt.figure(figsize=(8,8))
-    lw = 3
+    lw = [2,3,4]
     colors = ['blue','red', 'green']
+    linestyle = ['solid', 'dashed', 'dotted']
     for i in range(n_classes):
         plt.plot(
             mean_fpr,
             mean_tprs[i],
             color=colors[i],
-            lw=lw,
+            lw=lw[i],
+            linestyle=linestyle[i],
             label="Class %i (Mean AUC = %0.3f)" % (i, mean_aucs[i]),
         )
-    plt.plot([0, 1], [0, 1], color="grey", lw=lw, linestyle="--")
+    plt.plot([0, 1], [0, 1], color="lightgrey", lw=2, linestyle=(0, (3, 5, 1, 5)))
     plt.xlim([-0.03, 1.03])
     plt.xticks(fontsize=20)
     plt.ylim([-0.03, 1.03])
